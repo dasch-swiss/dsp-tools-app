@@ -101,6 +101,9 @@ class Onto(ttk.Frame):
                                     verbose=True,
                                     dump=False)
 
+    def get_json(self):
+        pass
+
 
 class App(ttk.Frame):
     def __init__(self, parent, *args, **kwargs):
