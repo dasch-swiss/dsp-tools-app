@@ -1,4 +1,9 @@
+from typing import List, Set, Dict, Tuple, Optional, Any, Union
+
 import os
+import json
+
+from pprint import pprint
 
 from tkinter import *
 import tkinter as tk
@@ -11,10 +16,18 @@ from tkinter import filedialog
 from knora.dsplib.models.connection import Connection
 from knora.dsplib.models.helpers import BaseError
 from knora.dsplib.models.user import User
+from knora.dsplib.models.project import Project
+from knora.dsplib.models.listnode import ListNode
+
+from knora.dsplib.models.langstring import Languages, LangString, LangStringIterator
+
 from knora.dsplib.utils.onto_validate import validate_ontology, validate_ontology_from_string
 from knora.dsplib.utils.onto_create_ontology import create_ontology, create_ontology_from_string
+from knora.dsplib.utils.onto_commons import list_creator, validate_list_from_excel, json_list_from_excel
 
 from components.login_dialog import LoginDialog
+from components.project_info import ProjectInfo
+from components.lists_info import ListsInfo
 
 
 class TaskBar(ttk.Frame):
@@ -51,9 +64,11 @@ class TextScrollCombo(ttk.Frame):
 
 
 class Onto(ttk.Frame):
-    def __init__(self, parent, the_app: 'App', *args, **kwargs):
+    def __init__(self, parent,
+                 the_app: 'App',
+                 *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
-        #topframe_w = ttk.Frame(parent)
+        self.ontoobj = None
         self.the_app = the_app
         self.pack(side=TOP, fill=X)
 
@@ -75,16 +90,90 @@ class Onto(ttk.Frame):
         self.upload_button_w = ttk.Button(hframe2_w, text="Upload", state=DISABLED, command=self.upload_json)
         self.upload_button_w.pack(side=LEFT, anchor=CENTER)
 
-        self.jsonview = TextScrollCombo(parent)
+        sep = ttk.Separator(self, orient=HORIZONTAL).pack(side=TOP, fill=X, expand=True, pady=5)
+
+        tabControl = ttk.Notebook(self)
+        tab1 = ttk.Frame(tabControl)
+        tabControl.add(tab1, text='DataModel')
+
+        self.jsonview = TextScrollCombo(tab1)
         self.jsonview.pack(side=TOP, anchor=S, fill=BOTH, expand=True)
+
+        tab2 = ttk.Frame(tabControl)
+        tabControl.add(tab2, text='Project')
+        self.project_info = ProjectInfo(tab2, None)
+        self.project_info.pack(side=TOP, anchor=N, fill=BOTH, expand=True)
+
+        tab3 = ttk.Frame(tabControl)
+        tabControl.add(tab3, text='Lists')
+        self.lists = ListsInfo(tab3)
+        self.lists.pack(side=TOP, anchor=N, fill=BOTH, expand=True)
+
+        tabControl.pack(side=TOP, fill=BOTH, expand=TRUE, padx=2, pady=2)
 
     def open_json(self):
         json_file_path = filedialog.askopenfile(mode="r", filetypes=(("JSON files", "*.json"), ("Any file", "*")))
         self.filepath.set(json_file_path.name)
         with json_file_path as reader:
-            self.jsonview.insert(END, reader.read())
+            self.jsonstr = reader.read()
+            #self.jsonview.delete("1.0", END)
+            self.jsonview.insert(END, self.jsonstr)
         self.validate_button_w.configure(state=NORMAL)
         self.upload_button_w.configure(state=NORMAL)
+
+        datapath = os.path.dirname(json_file_path.name)
+        datamodel = json.loads(self.jsonstr)
+
+        project = Project(
+            con=Connection("https://www.gaga.com"),
+            shortcode=datamodel["project"]["shortcode"],
+            shortname=datamodel["project"]["shortname"],
+            longname=datamodel["project"]["longname"],
+            description=LangString(datamodel["project"].get("descriptions")),
+            keywords=set(datamodel["project"].get("keywords")),
+            selfjoin=False,
+            status=True
+        )
+        self.project_info.project = project
+
+        listobj = datamodel["project"].get('lists')
+        newlists: [] = []
+        for rootnode in listobj:
+            if rootnode.get("nodes") is not None and isinstance(rootnode["nodes"], dict) and rootnode["nodes"].get("file") is not None:
+                newroot = {
+                    "name": rootnode.get("name"),
+                    "labels": rootnode.get("labels"),
+               }
+                if rootnode.get("comments") is not None:
+                    newroot["comments"] = rootnode["comments"]
+
+                startrow = 1 if rootnode["nodes"].get("startrow") is None else rootnode["nodes"]["startrow"]
+                startcol = 1 if rootnode["nodes"].get("startcol") is None else rootnode["nodes"]["startcol"]
+                #
+                # determine where to find the excel file...
+                #
+                excelpath = rootnode["nodes"]["file"]
+                if excelpath[0] != '/' and datapath is not None:
+                    excelpath = os.path.join(datapath, excelpath)
+
+                json_list_from_excel(rootnode=newroot,
+                                     filepath=excelpath,
+                                     sheetname=rootnode["nodes"]["worksheet"],
+                                     startrow=startrow,
+                                     startcol=startcol)
+                newlists.append(newroot)
+            else:
+                newlists.append(rootnode)
+        listobj = None
+        gagas: List[ListNode] = []
+        for list in newlists:
+            listtree = ListNode.readDefinitionFileObj(con=Connection("https://www.gaga.com"),
+                                                      project=project,
+                                                      rootnode=list)
+            listtree.print()
+            gagas.append(listtree)
+        pprint(gagas)
+        self.lists.add_lists(gagas)
 
     def validate_json(self):
         exeldir = os.path.dirname(os.path.realpath(self.filepath.get()))
@@ -129,9 +218,10 @@ class App(ttk.Frame):
 
         tabControl = ttk.Notebook(self)
         tab1 = ttk.Frame(tabControl)
-        tab1.configure(style="YY.TFrame")
+        #tab1.configure(style="YY.TFrame")
         tabControl.add(tab1, text='DSP-tools')
         self.onto = Onto(tab1, the_app=self)
+
 
         #gaga = ttk.Frame(self, style="YY.TFrame")
         taskbar.pack(side=TOP, fill=X, anchor=N, expand=False)
